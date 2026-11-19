@@ -1,5 +1,9 @@
 #define PCL_NO_PRECOMPILE
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_lifecycle/lifecycle_node.hpp"
+#include "rclcpp_lifecycle/lifecycle_publisher.hpp"
+#include "lifecycle_msgs/msg/state.hpp"
+#include "lifecycle_msgs/msg/transition.hpp"
 #include <ground_detection_types.hpp>
 #include <ground_detection.hpp>
 #include <pointcloud_processor.hpp>
@@ -49,16 +53,20 @@ void checkSubscriptionConnection(
     }
 }
 
-class GroundSegmentatioNode : public rclcpp::Node {
+class GroundSegmentatioNode : public rclcpp_lifecycle::LifecycleNode {
 public:
-    GroundSegmentatioNode(rclcpp::NodeOptions options) : Node("ground_segmentation",options) {
+    using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
+
+    GroundSegmentatioNode(rclcpp::NodeOptions options) : LifecycleNode("ground_segmentation", options) {}
+
+    CallbackReturn on_configure(const rclcpp_lifecycle::State &) override {
         publisher_ground_points = this->create_publisher<sensor_msgs::msg::PointCloud2>("/ground_segmentation/ground_points", 10);
         publisher_obstacle_points = this->create_publisher<sensor_msgs::msg::PointCloud2>("/ground_segmentation/obstacle_points", 10);
         publisher_raw_points = this->create_publisher<sensor_msgs::msg::PointCloud2>("/ground_segmentation/raw_points", 10);
 
         if (this->get_parameter("use_imu_orientation").as_bool()){
-            subscriber_synced_pointcloud = makeSensorDataSubscriber<message_filters::Subscriber<sensor_msgs::msg::PointCloud2>>("/ground_segmentation/input_pointcloud");
-            subscriber_synced_imu = makeSensorDataSubscriber<message_filters::Subscriber<sensor_msgs::msg::Imu>>("/ground_segmentation/input_imu");
+            subscriber_synced_pointcloud = makeSensorDataSubscriber<message_filters::Subscriber<sensor_msgs::msg::PointCloud2, GroundSegmentatioNode>>("/ground_segmentation/input_pointcloud");
+            subscriber_synced_imu = makeSensorDataSubscriber<message_filters::Subscriber<sensor_msgs::msg::Imu, GroundSegmentatioNode>>("/ground_segmentation/input_imu");
  
             auto imu_sub_ptr = subscriber_synced_imu->getSubscriber();
             auto pc_sub_ptr  = subscriber_synced_pointcloud->getSubscriber();
@@ -102,6 +110,37 @@ public:
 
         final_non_ground_points = std::make_shared<pcl::PointCloud<PointType>>(); 
         final_ground_points = std::make_shared<pcl::PointCloud<PointType>>(); 
+
+        return CallbackReturn::SUCCESS;
+    }
+
+    CallbackReturn on_activate(const rclcpp_lifecycle::State &) override {
+        publisher_ground_points->on_activate();
+        publisher_obstacle_points->on_activate();
+        publisher_raw_points->on_activate();
+        return CallbackReturn::SUCCESS;
+    }
+
+    CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override {
+        publisher_ground_points->on_deactivate();
+        publisher_obstacle_points->on_deactivate();
+        publisher_raw_points->on_deactivate();
+        return CallbackReturn::SUCCESS;
+    }
+
+    CallbackReturn on_cleanup(const rclcpp_lifecycle::State &) override {
+        subscriber_pointcloud.reset();
+        subscriber_synced_pointcloud.reset();
+        subscriber_synced_imu.reset();
+        sync.reset();
+        tf_listener.reset();
+        buffer.reset();
+        pre_processor.reset();
+        post_processor.reset();
+        publisher_ground_points.reset();
+        publisher_obstacle_points.reset();
+        publisher_raw_points.reset();
+        return CallbackReturn::SUCCESS;
     }
 
 private:
@@ -135,15 +174,15 @@ private:
     std::unique_ptr<PointCloudGrid<PointType>> pre_processor, post_processor;
     GridConfig pre_processor_config, post_processor_config;
 
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr 
+    rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::PointCloud2>::SharedPtr
         publisher_raw_points, 
         publisher_ground_points, 
         publisher_obstacle_points;
 
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscriber_pointcloud;
 
-    std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::PointCloud2>> subscriber_synced_pointcloud;
-    std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::Imu>> subscriber_synced_imu;
+    std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::PointCloud2, GroundSegmentatioNode>> subscriber_synced_pointcloud;
+    std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::Imu, GroundSegmentatioNode>> subscriber_synced_imu;
 
     using SyncPolicy = message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::PointCloud2, sensor_msgs::msg::Imu>;
     std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync;
@@ -309,7 +348,30 @@ int main(int argc, char** argv) {
     rclcpp::NodeOptions options;
     options.allow_undeclared_parameters(true);
     options.automatically_declare_parameters_from_overrides(true);
-    rclcpp::spin(std::make_shared<GroundSegmentatioNode>(options));
+    auto node = std::make_shared<GroundSegmentatioNode>(options);
+
+    if (!node->has_parameter("autostart")) {
+        node->declare_parameter("autostart", true);
+    }
+    const bool autostart = node->get_parameter("autostart").as_bool();
+    if (autostart) {
+        const auto configured_state = node->trigger_transition(
+            lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE);
+        const bool configured =
+            configured_state.id() == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE;
+        const auto activated_state = configured
+            ? node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE)
+            : node->get_current_state();
+        const bool activated =
+            configured && activated_state.id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
+        if (!activated) {
+            RCLCPP_ERROR(node->get_logger(), "Failed to automatically activate lifecycle node");
+            rclcpp::shutdown();
+            return 1;
+        }
+    }
+
+    rclcpp::spin(node->get_node_base_interface());
     rclcpp::shutdown();
     return 0;
 }

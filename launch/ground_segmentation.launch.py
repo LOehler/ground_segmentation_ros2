@@ -5,6 +5,7 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch_ros.actions import LifecycleNode
 
 
 def launch_setup(context, *args, **kwargs):
@@ -20,13 +21,16 @@ def launch_setup(context, *args, **kwargs):
     else:
         parameters_file = params_file_arg
 
-    ground_segmentation_ros2_node = Node(
+    ground_segmentation_ros2_node = LifecycleNode(
         package='ground_segmentation_ros2',
         executable='ground_segmentation_ros2_node',
+        name='ground_segmentation',
+        namespace='',
         parameters=[
             parameters_file,
             {
-                'use_sim_time': LaunchConfiguration('use_sim_time')
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'autostart': LaunchConfiguration('autostart'),
             }
         ],
         remappings=[
@@ -42,6 +46,14 @@ def launch_setup(context, *args, **kwargs):
 def generate_launch_description():
     """Declare the launch arguments and return the launch description."""
     declared_arguments = []
+
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            'autostart',
+            default_value='true',
+            description='Automatically configure and activate the ground_segmentation lifecycle node',
+        )
+    )
 
     declared_arguments.append(
         DeclareLaunchArgument(

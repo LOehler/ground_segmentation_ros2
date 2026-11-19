@@ -10,6 +10,8 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(PCL REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
+find_package(lifecycle_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_eigen REQUIRED)
 find_package(pcl_conversions REQUIRED)
@@ -29,6 +31,8 @@ target_include_directories(ground_segmentation_ros2_node PUBLIC
 target_link_libraries(ground_segmentation_ros2_node PUBLIC
   ${geometry_msgs_TARGETS}
   rclcpp::rclcpp
+  rclcpp_lifecycle::rclcpp_lifecycle
+  lifecycle_msgs::lifecycle_msgs
   ${sensor_msgs_TARGETS}
   ${std_msgs_TARGETS}
   ${std_srvs_TARGETS}
